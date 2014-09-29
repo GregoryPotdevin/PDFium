@@ -31,6 +31,12 @@ enum OutputFormat {
 #endif
 };
 
+struct OutputOptions{
+	OutputFormat format;
+	unsigned int width, height;
+	OutputOptions() :format(OUTPUT_NONE), width(0), height(0){};
+};
+
 static void WritePpm(const char* pdf_name, int num, const void* buffer_void,
                      int stride, int width, int height) {
   const char* buffer = reinterpret_cast<const char*>(buffer_void);
@@ -183,27 +189,44 @@ void Unsupported_Handler(UNSUPPORT_INFO*, int type) {
   printf("Unsupported feature: %s.\n", feature.c_str());
 }
 
-bool ParseCommandLine(int argc, const char* argv[], OutputFormat* output_format,
+bool ParseCommandLine(int argc, const char* argv[], OutputOptions *options,
                       std::list<const char*>* files) {
-  *output_format = OUTPUT_NONE;
+	options->format = OUTPUT_NONE;
+	options->width = 0;
+	options->height = 0;
   files->clear();
 
   int cur_arg = 1;
   for (; cur_arg < argc; ++cur_arg) {
     if (strcmp(argv[cur_arg], "--ppm") == 0)
-      *output_format = OUTPUT_PPM;
+		options->format = OUTPUT_PPM;
 #ifdef _WIN32
     else if (strcmp(argv[cur_arg], "--emf") == 0)
-      *output_format = OUTPUT_EMF;
+		options->format = OUTPUT_EMF;
     else if (strcmp(argv[cur_arg], "--bmp") == 0)
-      *output_format = OUTPUT_BMP;
+		options->format = OUTPUT_BMP;
 #endif
+	else if (strcmp(argv[cur_arg], "--width") == 0){
+		if (cur_arg + 1 < argc){
+			cur_arg++;
+			options->width = atoi(argv[cur_arg]);
+		}
+		else {
+			return false;
+		}
+	}
+	else if (strcmp(argv[cur_arg], "--height") == 0){
+		if (cur_arg + 1 < argc){
+			cur_arg++;
+			options->height = atoi(argv[cur_arg]);
+		}
+		else {
+			return false;
+		}
+	}
     else
       break;
   }
-
-  if (cur_arg > 2)  // Multiple options.
-    return false;
 
   if (cur_arg >= argc)  // No input files.
     return false;
@@ -242,7 +265,7 @@ void Add_Segment(FX_DOWNLOADHINTS* pThis, size_t offset, size_t size) {
 }
 
 void RenderPdf(const char* name, const char* pBuf, size_t len,
-               OutputFormat format) {
+	OutputOptions options) {
   printf("Rendering PDF file %s.\n", name);
 
   IPDF_JSPLATFORM platform_callbacks;
@@ -310,8 +333,21 @@ void RenderPdf(const char* name, const char* pBuf, size_t len,
     FORM_OnAfterLoadPage(page, form);
     FORM_DoPageAAction(page, form, FPDFPAGE_AACTION_OPEN);
 
-    int width = static_cast<int>(FPDF_GetPageWidth(page));
-    int height = static_cast<int>(FPDF_GetPageHeight(page));
+	unsigned int width = options.width;
+	unsigned int height = options.height;
+	unsigned int pdf_width = static_cast<unsigned int>(FPDF_GetPageWidth(page));
+	unsigned int pdf_height = static_cast<unsigned int>(FPDF_GetPageHeight(page));
+	float pdf_ratio = (float)pdf_width / pdf_height;
+	if ((width == 0) && (height == 0)){
+		width = pdf_width;
+		height = pdf_height;
+	}
+	else if (height == 0){
+		height = static_cast<unsigned int>(width / pdf_ratio + 0.5f);
+	}
+	else if (width == 0){
+		width = static_cast<unsigned int>(height*pdf_ratio + 0.5f);
+	}
     FPDF_BITMAP bitmap = FPDFBitmap_Create(width, height, 0);
     FPDFBitmap_FillRect(bitmap, 0, 0, width, height, 0xFFFFFFFF);
 
@@ -321,7 +357,7 @@ void RenderPdf(const char* name, const char* pBuf, size_t len,
     const char* buffer =
         reinterpret_cast<const char*>(FPDFBitmap_GetBuffer(bitmap));
 
-    switch (format) {
+    switch (options.format) {
 #ifdef _WIN32
       case OUTPUT_BMP:
         WriteBmp(name, i, buffer, stride, width, height);
@@ -355,16 +391,18 @@ void RenderPdf(const char* name, const char* pBuf, size_t len,
 }
 
 int main(int argc, const char* argv[]) {
-  v8::V8::InitializeICU();
-  OutputFormat format = OUTPUT_NONE;
+	v8::V8::InitializeICU();
+	OutputOptions options;
   std::list<const char*> files;
-  if (!ParseCommandLine(argc, argv, &format, &files)) {
-    printf("Usage: pdfium_test [OPTION] [FILE]...\n");
-    printf("--ppm    write page images <pdf-name>.<page-number>.ppm\n");
+  if (!ParseCommandLine(argc, argv, &options, &files)) {
+    printf("Usage: pdfium_test [OPTIONS] [FILE]...\n");
+    printf("--ppm        write page images <pdf-name>.<page-number>.ppm\n");
 #ifdef _WIN32
-    printf("--bmp    write page images <pdf-name>.<page-number>.bmp\n");
-    printf("--emf    write page meta files <pdf-name>.<page-number>.emf\n");
+	printf("--bmp        write page images <pdf-name>.<page-number>.bmp\n");
+	printf("--emf        write page meta files <pdf-name>.<page-number>.emf\n");
 #endif
+	printf("--width  w   target output width\n");
+	printf("--height h   target output height\n");
     return 1;
   }
 
@@ -394,7 +432,7 @@ int main(int argc, const char* argv[]) {
     if (ret != len) {
       fprintf(stderr, "Failed to read: %s\n", filename);
     } else {
-      RenderPdf(filename, pBuf, len, format);
+		RenderPdf(filename, pBuf, len, options);
     }
     free(pBuf);
   }
